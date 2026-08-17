@@ -1,0 +1,19 @@
+name = "myemergencyinfo-app"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+# Filled in automatically the first time the D1 database is created
+# (dashboard: Storage & Databases > D1, or `wrangler d1 create myemergencyinfo`)
+[[d1_databases]]
+binding = "DB"
+database_name = "myemergencyinfo"
+database_id = "REPLACE_WITH_ID_FROM_D1_DATABASE_CREATION"
+
+# Set these as Worker environment variables in the dashboard
+# (Settings > Variables and Secrets), not by editing this file:
+#   PUBLIC_BASE_URL   -> https://id.myemergencyinfo.net
+#   WEBHOOK_SECRET    -> 538cd3cbeee7e0d067064e60506b2fcf51df72e6189905aa

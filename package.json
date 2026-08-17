@@ -1,0 +1,19 @@
+{
+  "name": "myemergencyinfo-app",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Public emergency-info profile app for id.myemergencyinfo.net (Cloudflare Pages + Functions + D1)",
+  "scripts": {
+    "dev": "wrangler dev --local",
+    "deploy": "wrangler deploy",
+    "db:init": "wrangler d1 execute myemergencyinfo --file=./schema.sql",
+    "db:init:local": "wrangler d1 execute myemergencyinfo --local --file=./schema.sql"
+  },
+  "dependencies": {
+    "pdf-lib": "^1.17.1",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "wrangler": "^3.90.0"
+  }
+}
