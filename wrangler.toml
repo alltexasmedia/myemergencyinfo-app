@@ -11,7 +11,7 @@ binding = "ASSETS"
 [[d1_databases]]
 binding = "DB"
 database_name = "myemergencyinfo"
-database_id = database_id = "3675de2a-8abe-4b8a-9255-46aacbd40a64"
+database_id = "3675de2a-8abe-4b8a-9255-46aacbd40a64"
 
 # Set these as Worker environment variables in the dashboard
 # (Settings > Variables and Secrets), not by editing this file:
