@@ -1,4 +1,4 @@
-import { upsertProfileFromWebhook, issueEditToken, getProfileByCode, getProfileByValidEditToken, updateProfileFields, invalidateEditToken } from "./lib/db.js";
+import { upsertProfileFromWebhook, issueEditToken, getProfileByCode, getProfileByValidEditToken, updateProfileFields, invalidateEditToken, isPaidTier } from "./lib/db.js";
 import { generateQrSvg, generateQrPngDataUrl } from "./lib/qr.js";
 import { generateProfilePdf } from "./lib/pdf.js";
 import { renderProfileHtml, renderEditFormHtml } from "./lib/render.js";
@@ -41,7 +41,7 @@ async function handleWebhook(request, env) {
 
   const { code, isNew } = await upsertProfileFromWebhook(env, payload);
   const profileUrl = `${env.PUBLIC_BASE_URL}/e/${code}`;
-  const { token, expiresAt } = await issueEditToken(env, code);
+  const { token, expiresAt } = await issueEditToken(env, code, payload.tier ?? "free");
   const editUrl = `${env.PUBLIC_BASE_URL}/edit/${token}`;
   const qrSvg = await generateQrSvg(profileUrl);
   const qrPngDataUrl = await generateQrPngDataUrl(profileUrl);
@@ -82,8 +82,10 @@ function expiredHtml() {
   <title>Link expired</title></head>
   <body style="font-family:sans-serif;max-width:480px;margin:60px auto;padding:0 16px;">
   <h1>This edit link has expired</h1>
-  <p>Edit links are single-use and expire after 48 hours for security.
-  Request a new one from your account, and it'll be emailed to you.</p>
+  <p>This link is no longer active — either it already expired, or (if you're
+  on a paid plan) a newer link was issued the last time you saved changes.
+  Check your most recent confirmation for the current link, or contact us
+  for a new one.</p>
   </body></html>`;
 }
 
@@ -119,10 +121,28 @@ async function handleEditPost(token, env, request) {
   };
 
   await updateProfileFields(env, profile.code, fields);
-  await invalidateEditToken(env, profile.code);
 
   const updated = { ...profile, ...fields };
-  return html(renderEditFormHtml(updated, token, { saved: true }));
+
+  if (isPaidTier(profile.tier)) {
+    // Unlimited edits for paid tiers: this save also issues a brand-new
+    // link (which overwrites/invalidates the one just used), and we show
+    // it on the confirmation page so the customer can keep using it.
+    const { token: newToken, expiresAt } = await issueEditToken(env, profile.code, profile.tier);
+    const newEditUrl = `${env.PUBLIC_BASE_URL}/edit/${newToken}`;
+    return html(
+      renderEditFormHtml(updated, newToken, {
+        saved: true,
+        newEditUrl,
+        newEditExpiresAt: expiresAt,
+        tier: profile.tier,
+      })
+    );
+  }
+
+  // Free tier: single-use, as before — this is the upgrade hook.
+  await invalidateEditToken(env, profile.code);
+  return html(renderEditFormHtml(updated, token, { saved: true, tier: profile.tier }));
 }
 
 export default {
