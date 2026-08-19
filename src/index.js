@@ -35,8 +35,8 @@ async function handleWebhook(request, env) {
     return json({ error: "invalid JSON body" }, 400);
   }
 
-  if (!payload.ghl_contact_id) {
-    return json({ error: "ghl_contact_id is required" }, 400);
+  if (!payload.email) {
+    return json({ error: "email is required" }, 400);
   }
 
   const { code, isNew } = await upsertProfileFromWebhook(env, payload);
