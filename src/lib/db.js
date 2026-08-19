@@ -11,13 +11,14 @@ function nowSeconds() {
   return Math.floor(Date.now() / 1000);
 }
 
+// emergency_contacts / doctors / medications are stored as plain free-form
+// text (one entry per line, typed by the customer) — not JSON. Only
+// `conditions` is still a small JSON array of strings, since that one
+// renders as individual pill/flag badges on the page.
 function parseJsonColumns(row) {
   if (!row) return row;
   return {
     ...row,
-    emergency_contacts: safeParse(row.emergency_contacts, []),
-    doctors: safeParse(row.doctors, []),
-    medications: safeParse(row.medications, []),
     conditions: safeParse(row.conditions, []),
   };
 }
@@ -29,6 +30,15 @@ function safeParse(value, fallback) {
   } catch {
     return fallback;
   }
+}
+
+// Turns the comma-separated "conditions" text (from either the GHL webhook
+// or the self-service edit form) into a clean array of strings for storage.
+export function splitConditions(text) {
+  return String(text ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 export async function getProfileByCode(env, code) {
@@ -74,10 +84,10 @@ export async function upsertProfileFromWebhook(env, payload) {
   const fields = {
     full_name: payload.full_name ?? null,
     tier: payload.tier ?? "free",
-    emergency_contacts: JSON.stringify(payload.emergency_contacts ?? []),
-    doctors: JSON.stringify(payload.doctors ?? []),
-    medications: JSON.stringify(payload.medications ?? []),
-    conditions: JSON.stringify(payload.conditions ?? []),
+    emergency_contacts: String(payload.emergency_contacts ?? ""),
+    doctors: String(payload.doctors ?? ""),
+    medications: String(payload.medications ?? ""),
+    conditions: JSON.stringify(splitConditions(payload.conditions)),
     allergies: payload.allergies ?? null,
     blood_type: payload.blood_type ?? null,
   };
@@ -166,9 +176,9 @@ export async function updateProfileFields(env, code, fields) {
   )
     .bind(
       fields.full_name ?? null,
-      JSON.stringify(fields.emergency_contacts ?? []),
-      JSON.stringify(fields.doctors ?? []),
-      JSON.stringify(fields.medications ?? []),
+      String(fields.emergency_contacts ?? ""),
+      String(fields.doctors ?? ""),
+      String(fields.medications ?? ""),
       JSON.stringify(fields.conditions ?? []),
       fields.allergies ?? null,
       fields.blood_type ?? null,
