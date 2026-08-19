@@ -1,7 +1,36 @@
+import { visibleLines } from "./tiers.js";
+
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]));
+}
+
+// Contacts/doctors/medications are typed as free-form text (one entry per
+// line) rather than separate name/phone fields, to keep GHL setup simple.
+// This finds anything that looks like a phone number in that text and turns
+// it into a tap-to-call link, so we don't lose that usability even without
+// a dedicated phone field.
+function linkifyPhones(escapedText) {
+  return escapedText.replace(
+    /(\+?1?[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4})/g,
+    (match) => `<a class="tel" href="tel:${match.replace(/[^\d+]/g, "")}">${match}</a>`
+  );
+}
+
+// Renders a free-text field (contacts/doctors/medications) preserving line
+// breaks, with phone numbers made tappable, but only up to what this
+// profile's tier is allowed to show — anything beyond that is still saved
+// (visible/editable via the edit link) but gated behind an upgrade note.
+// Returns null for empty text so callers can show an empty-state message.
+function renderTieredBlock(text, tier, field) {
+  const { shown, hiddenCount } = visibleLines(text, tier, field);
+  if (!shown.length) return null;
+  const block = `<div class="textblock">${linkifyPhones(esc(shown.join("\n")))}</div>`;
+  const upsell = hiddenCount > 0
+    ? `<div class="upsell">+ ${hiddenCount} more saved on your account — upgrade to show ${hiddenCount === 1 ? "it" : "all of them"} here.</div>`
+    : "";
+  return block + upsell;
 }
 
 // Site logo, embedded directly so no separate image file/upload is needed.
@@ -30,6 +59,9 @@ const BASE_STYLE = `
   .name{font-weight:700;}
   .sub{color:#55606e;font-size:13px;}
   a.tel{color:#1a2b4c;text-decoration:none;font-weight:700;}
+  .textblock{white-space:pre-line;font-size:14px;line-height:1.6;}
+  .upsell{margin-top:10px;padding:8px 10px;background:#eef1f6;border-radius:6px;
+    font-size:12px;color:#1a2b4c;font-weight:600;}
   .btn{display:block;text-align:center;background:#1a2b4c;color:#fff;padding:12px;
     border-radius:8px;text-decoration:none;font-weight:700;margin-top:10px;}
   .empty{color:#8a94a1;font-size:13px;font-style:italic;}
@@ -52,26 +84,14 @@ export function renderProfileHtml(profile, { profileUrl }) {
     year: "numeric", month: "long", day: "numeric",
   });
 
-  const contactsHtml = profile.emergency_contacts?.length
-    ? profile.emergency_contacts.map((c) => `
-        <div class="row"><span class="name">${esc(c.name)}</span>
-        <span class="sub"> — ${esc(c.relationship)}</span><br>
-        <a class="tel" href="tel:${esc(c.phone)}">${esc(c.phone)}</a></div>`).join("")
-    : `<p class="empty">No emergency contacts on file.</p>`;
+  const contactsHtml = renderTieredBlock(profile.emergency_contacts, profile.tier, "emergency_contacts")
+    ?? `<p class="empty">No emergency contacts on file.</p>`;
 
-  const doctorsHtml = profile.doctors?.length
-    ? profile.doctors.map((d) => `
-        <div class="row"><span class="name">${esc(d.name)}</span>
-        <span class="sub"> — ${esc(d.specialty)}</span><br>
-        <a class="tel" href="tel:${esc(d.phone)}">${esc(d.phone)}</a></div>`).join("")
-    : `<p class="empty">No doctors on file.</p>`;
+  const doctorsHtml = renderTieredBlock(profile.doctors, profile.tier, "doctors")
+    ?? `<p class="empty">No doctors on file.</p>`;
 
-  const medsHtml = profile.medications?.length
-    ? profile.medications.map((m) => `
-        <div class="row"><span class="name">${esc(m.name)}</span>
-        ${m.dosage ? `<span class="sub"> — ${esc(m.dosage)}</span>` : ""}
-        ${m.frequency ? `<div class="sub">${esc(m.frequency)}</div>` : ""}</div>`).join("")
-    : `<p class="empty">No medications on file.</p>`;
+  const medsHtml = renderTieredBlock(profile.medications, profile.tier, "medications")
+    ?? `<p class="empty">No medications on file.</p>`;
 
   const conditionsHtml = profile.conditions?.length
     ? profile.conditions.map((c) => `<span class="flag">${esc(c)}</span>`).join(" ")
@@ -112,12 +132,6 @@ export function renderEditFormHtml(
   token,
   { saved = false, error = null, newEditUrl = null, tier = null } = {}
 ) {
-  const contactsRows = (profile.emergency_contacts?.length ? profile.emergency_contacts : [{}])
-    .map((c) => `<div class="row3">
-      <input name="ec_name[]" placeholder="Name" value="${esc(c.name)}">
-      <input name="ec_rel[]" placeholder="Relationship" value="${esc(c.relationship)}">
-      <input name="ec_phone[]" placeholder="Phone" value="${esc(c.phone)}"></div>`).join("");
-
   const savedBlock = !saved
     ? ""
     : newEditUrl
@@ -143,9 +157,10 @@ export function renderEditFormHtml(
   <title>Update your emergency info</title>
   <style>${BASE_STYLE}
     input,textarea{width:100%;box-sizing:border-box;padding:9px;margin:4px 0;
-      border:1px solid #cfd6de;border-radius:6px;font-size:14px;}
-    .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:6px;}
+      border:1px solid #cfd6de;border-radius:6px;font-size:14px;font-family:inherit;}
+    textarea{resize:vertical;min-height:76px;}
     label{font-size:12px;color:#55606e;font-weight:700;}
+    .hint{font-size:11px;color:#8a94a1;margin:-2px 0 2px;}
   </style></head>
   <body><div class="wrap">
     <div class="brand"><img src="${LOGO_DATA_URL}" alt="My Emergency Info logo"><span>MY EMERGENCY INFO</span></div>
@@ -159,7 +174,14 @@ export function renderEditFormHtml(
       <label>Full name</label>
       <input name="full_name" value="${esc(profile.full_name)}">
       <label>Emergency contacts</label>
-      ${contactsRows}
+      <div class="hint">One per line, e.g. Jane Doe (Sister) — 555-123-4567</div>
+      <textarea name="emergency_contacts">${esc(profile.emergency_contacts)}</textarea>
+      <label>Doctors</label>
+      <div class="hint">One per line, e.g. Dr. Smith, Cardiologist — 555-987-6543</div>
+      <textarea name="doctors">${esc(profile.doctors)}</textarea>
+      <label>Medications</label>
+      <div class="hint">One per line, e.g. Metformin 500mg — twice daily</div>
+      <textarea name="medications">${esc(profile.medications)}</textarea>
       <label>Blood type</label>
       <input name="blood_type" value="${esc(profile.blood_type)}">
       <label>Allergies</label>
