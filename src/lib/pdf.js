@@ -1,5 +1,6 @@
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { generateQrPngDataUrl } from "./qr.js";
+import { visibleLines } from "./tiers.js";
 
 // Builds a one-page wallet/glovebox card PDF from the same live record that
 // powers the public page, so the two are always in sync. Regenerated fresh
@@ -36,30 +37,37 @@ export async function generateProfilePdf(profile, profileUrl) {
     drawLine(`Allergies: ${profile.allergies}`, { size: 10, gap: 16 });
   }
 
-  if (profile.emergency_contacts?.length) {
+  // Contacts/doctors/medications are typed as free-form text (one entry per
+  // line). Only show what this profile's tier is allowed to — the same
+  // limits the public page enforces — so the PDF can't be used to bypass
+  // the paywall.
+  const drawUpsell = (count) =>
+    drawLine(`+ ${count} more on file — upgrade to include ${count === 1 ? "it" : "them"} here.`, {
+      size: 8, color: gray,
+    });
+
+  const contacts = visibleLines(profile.emergency_contacts, profile.tier, "emergency_contacts");
+  if (contacts.shown.length) {
     y -= 4;
     drawLine("EMERGENCY CONTACTS", { size: 9, f: bold, color: gray, gap: 12 });
-    profile.emergency_contacts.forEach((c) => {
-      drawLine(`${c.name} (${c.relationship}) — ${c.phone}`, { size: 10 });
-    });
+    contacts.shown.forEach((line) => drawLine(line, { size: 10 }));
+    if (contacts.hiddenCount > 0) drawUpsell(contacts.hiddenCount);
     y -= 6;
   }
 
-  if (profile.doctors?.length) {
+  const doctors = visibleLines(profile.doctors, profile.tier, "doctors");
+  if (doctors.shown.length) {
     drawLine("DOCTORS", { size: 9, f: bold, color: gray, gap: 12 });
-    profile.doctors.forEach((d) => {
-      drawLine(`${d.name}, ${d.specialty} — ${d.phone}`, { size: 10 });
-    });
+    doctors.shown.forEach((line) => drawLine(line, { size: 10 }));
+    if (doctors.hiddenCount > 0) drawUpsell(doctors.hiddenCount);
     y -= 6;
   }
 
-  if (profile.medications?.length) {
+  const medications = visibleLines(profile.medications, profile.tier, "medications");
+  if (medications.shown.length) {
     drawLine("MEDICATIONS", { size: 9, f: bold, color: gray, gap: 12 });
-    profile.medications.forEach((m) => {
-      drawLine(`${m.name} ${m.dosage ? "— " + m.dosage : ""} ${m.frequency ? "(" + m.frequency + ")" : ""}`, {
-        size: 10,
-      });
-    });
+    medications.shown.forEach((line) => drawLine(line, { size: 10 }));
+    if (medications.hiddenCount > 0) drawUpsell(medications.hiddenCount);
   }
 
   // QR code + live-link footer, so a printed card can always be rescanned
