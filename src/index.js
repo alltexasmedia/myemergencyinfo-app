@@ -1,4 +1,4 @@
-import { upsertProfileFromWebhook, issueEditToken, getProfileByCode, getProfileByValidEditToken, updateProfileFields, invalidateEditToken, isPaidTier } from "./lib/db.js";
+import { upsertProfileFromWebhook, issueEditToken, getProfileByCode, getProfileByValidEditToken, updateProfileFields, invalidateEditToken, isPaidTier, splitConditions } from "./lib/db.js";
 import { generateQrSvg, generateQrPngDataUrl } from "./lib/qr.js";
 import { generateProfilePdf } from "./lib/pdf.js";
 import { renderProfileHtml, renderEditFormHtml } from "./lib/render.js";
@@ -100,22 +100,12 @@ async function handleEditPost(token, env, request) {
   if (!profile) return html(expiredHtml(), 410);
 
   const form = await request.formData();
-  const names = form.getAll("ec_name[]");
-  const rels = form.getAll("ec_rel[]");
-  const phones = form.getAll("ec_phone[]");
-  const emergency_contacts = names
-    .map((name, i) => ({ name, relationship: rels[i], phone: phones[i] }))
-    .filter((c) => c.name || c.phone);
-
   const fields = {
     full_name: form.get("full_name") || "",
-    emergency_contacts,
-    doctors: profile.doctors,
-    medications: profile.medications,
-    conditions: (form.get("conditions") || "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean),
+    emergency_contacts: form.get("emergency_contacts") || "",
+    doctors: form.get("doctors") || "",
+    medications: form.get("medications") || "",
+    conditions: splitConditions(form.get("conditions")),
     allergies: form.get("allergies") || "",
     blood_type: form.get("blood_type") || "",
   };
