@@ -1,6 +1,11 @@
 import { generateCode, generateEditToken, hashToken } from "./codegen.js";
 
-const EDIT_TOKEN_TTL_SECONDS = 60 * 60 * 48; // 48 hours
+const EDIT_TOKEN_TTL_SECONDS = 60 * 60 * 48; // 48 hours — free tier's one-shot link
+// Paid tiers advertise "update anytime," and a fresh link is issued on every
+// save anyway — but the very first link (from the signup confirmation email)
+// needs to survive until the customer's first edit, whenever that is. A long
+// TTL here is what makes "anytime" actually true instead of a 48-hour window.
+const PAID_EDIT_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 365; // 1 year
 
 function nowSeconds() {
   return Math.floor(Date.now() / 1000);
@@ -127,10 +132,11 @@ export async function upsertProfileFromWebhook(env, payload) {
 // Issues a fresh one-time edit link. Only the SHA-256 hash is stored —
 // the plaintext token is returned once, for GHL to email/text to the
 // customer, and is never persisted anywhere in plaintext.
-export async function issueEditToken(env, code) {
+export async function issueEditToken(env, code, tier = "free") {
   const token = generateEditToken();
   const hash = await hashToken(token);
-  const expiresAt = nowSeconds() + EDIT_TOKEN_TTL_SECONDS;
+  const ttl = isPaidTier(tier) ? PAID_EDIT_TOKEN_TTL_SECONDS : EDIT_TOKEN_TTL_SECONDS;
+  const expiresAt = nowSeconds() + ttl;
   await env.DB.prepare(
     "UPDATE profiles SET edit_token_hash=?, edit_token_expires_at=? WHERE code=?"
   )
@@ -180,4 +186,13 @@ export async function invalidateEditToken(env, code) {
   )
     .bind(code)
     .run();
+}
+
+// Paid tiers get unlimited self-service edits, marketed as "update your
+// info anytime." Free tier's edit link is single-use, which is the
+// upgrade hook. Keep this list in sync with the tiers offered at signup.
+const PAID_TIERS = new Set(["essential", "ultimate"]);
+
+export function isPaidTier(tier) {
+  return PAID_TIERS.has(tier);
 }
