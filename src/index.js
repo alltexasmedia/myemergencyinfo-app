@@ -22,7 +22,61 @@ function html(body, status = 200) {
   });
 }
 
-async function handleWebhook(request, env) {
+function escHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+// GHL's webhook action can't pass its own response (this app's reply) into
+// a later email step — confirmed dead end, no response-mapping feature in
+// this account's builder. So the app sends the confirmation itself, via
+// Resend, the moment it creates/updates the profile. Never throws — a
+// failed email should not break profile creation, since the customer can
+// still be shown the failure) or the info can be resent by hand.
+async function sendConfirmationEmail(env, { to, fullName, profileUrl, editUrl, qrPngDataUrl, tier }) {
+  if (!env.RESEND_API_KEY) return; // not configured yet — skip quietly rather than fail the webhook
+
+  const fromAddress = env.EMAIL_FROM || "My Emergency Info <hello@mail.myemergencyinfo.net>";
+  const qrBase64 = qrPngDataUrl.split(",")[1];
+  const greetingName = fullName ? `, ${escHtml(fullName)}` : "";
+
+  const upgradeNote = isPaidTier(tier)
+    ? `<p>Your plan includes <strong>unlimited updates</strong> — use the secure link below anytime your info changes, and you'll always get a fresh one back after you save.</p>`
+    : `<p>On the free plan, the update link below works <strong>once</strong>. Upgrading to Essential or Ultimate gets you a link that always stays active, plus room to list more emergency contacts, doctors, and medications on your page.</p>`;
+
+  const bodyHtml = `
+    <div style="font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif;max-width:480px;margin:0 auto;color:#1f2430;">
+      <h2 style="color:#1a2b4c;">Your Emergency Info page is ready${greetingName}</h2>
+      <p>Here's your permanent emergency-info link — save it, print it, or scan the attached QR code:</p>
+      <p><a href="${escHtml(profileUrl)}" style="color:#1a2b4c;font-weight:bold;">${escHtml(profileUrl)}</a></p>
+      <p><a href="${escHtml(profileUrl)}/pdf" style="color:#1a2b4c;">Download a printable wallet/glovebox card (PDF)</a></p>
+      ${upgradeNote}
+      <p>To update your info, use this secure link: <a href="${escHtml(editUrl)}">${escHtml(editUrl)}</a></p>
+    </div>`;
+
+  try {
+    await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: fromAddress,
+        to: [to],
+        subject: "Your Emergency Info page is ready",
+        html: bodyHtml,
+        attachments: [{ filename: "emergency-info-qr.png", content: qrBase64 }],
+      }),
+    });
+  } catch {
+    // Swallow errors — a broken email send should never take down profile
+    // creation. Worth revisiting with real logging once there's volume.
+  }
+}
+
+async function handleWebhook(request, env, ctx) {
   const secret = request.headers.get("x-webhook-secret");
   if (!env.WEBHOOK_SECRET || secret !== env.WEBHOOK_SECRET) {
     return json({ error: "unauthorized" }, 401);
@@ -45,6 +99,18 @@ async function handleWebhook(request, env) {
   const editUrl = `${env.PUBLIC_BASE_URL}/edit/${token}`;
   const qrSvg = await generateQrSvg(profileUrl);
   const qrPngDataUrl = await generateQrPngDataUrl(profileUrl);
+
+  // Fire-and-forget: don't make GHL's webhook step wait on email delivery.
+  ctx.waitUntil(
+    sendConfirmationEmail(env, {
+      to: payload.email,
+      fullName: payload.full_name,
+      profileUrl,
+      editUrl,
+      qrPngDataUrl,
+      tier: payload.tier ?? "free",
+    })
+  );
 
   return json({
     code,
@@ -143,7 +209,7 @@ export default {
 
     try {
       if (path === "/api/webhook-ghl" && method === "POST") {
-        return await handleWebhook(request, env);
+        return await handleWebhook(request, env, ctx);
       }
 
       let m;
