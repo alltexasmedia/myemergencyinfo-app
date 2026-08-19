@@ -48,11 +48,14 @@ export async function getProfileByCode(env, code) {
   return parseJsonColumns(row);
 }
 
-export async function getProfileByGhlContactId(env, ghlContactId) {
-  const row = await env.DB.prepare(
-    "SELECT * FROM profiles WHERE ghl_contact_id = ?"
-  )
-    .bind(ghlContactId)
+// GHL's webhook action doesn't reliably expose a contact ID as a mergeable
+// field, but it does automatically include `email` as part of its
+// "standard data" — so email is what identifies a returning customer
+// (i.e. what tells us to update their existing profile instead of
+// creating a second one).
+export async function getProfileByEmail(env, email) {
+  const row = await env.DB.prepare("SELECT * FROM profiles WHERE email = ?")
+    .bind(email)
     .first();
   return parseJsonColumns(row);
 }
@@ -76,12 +79,13 @@ async function generateUniqueCode(env) {
 // for that contact. The permanent `code` (and therefore the public URL and
 // QR code) is only ever assigned once, on creation.
 export async function upsertProfileFromWebhook(env, payload) {
-  const existing = payload.ghl_contact_id
-    ? await getProfileByGhlContactId(env, payload.ghl_contact_id)
+  const existing = payload.email
+    ? await getProfileByEmail(env, payload.email)
     : null;
 
   const ts = nowSeconds();
   const fields = {
+    email: payload.email ?? null,
     full_name: payload.full_name ?? null,
     tier: payload.tier ?? "free",
     emergency_contacts: String(payload.emergency_contacts ?? ""),
@@ -117,13 +121,13 @@ export async function upsertProfileFromWebhook(env, payload) {
   const code = await generateUniqueCode(env);
   await env.DB.prepare(
     `INSERT INTO profiles
-     (code, ghl_contact_id, tier, full_name, emergency_contacts, doctors,
+     (code, email, tier, full_name, emergency_contacts, doctors,
       medications, conditions, allergies, blood_type, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       code,
-      payload.ghl_contact_id ?? null,
+      fields.email,
       fields.tier,
       fields.full_name,
       fields.emergency_contacts,
