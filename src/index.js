@@ -2,7 +2,6 @@ import { upsertProfileFromWebhook, issueEditToken, getProfileByCode, getProfileB
 import { generateQrSvg, generateQrPngDataUrl } from "./lib/qr.js";
 import { generateProfilePdf } from "./lib/pdf.js";
 import { renderProfileHtml, renderEditFormHtml } from "./lib/render.js";
-import { fetchMultilineFieldsFromGhl } from "./lib/ghlApi.js";
 
 // Single Workers entry point (replaces the old Pages Functions folder
 // convention). Cloudflare's dashboard now leads new accounts to plain
@@ -35,7 +34,7 @@ function escHtml(s) {
 // Resend, the moment it creates/updates the profile. Never throws — a
 // failed email should not break profile creation, since the customer can
 // still be shown the failure) or the info can be resent by hand.
-async function sendConfirmationEmail(env, { to, fullName, profileUrl, editUrl, qrPngDataUrl, tier, debugPayload }) {
+async function sendConfirmationEmail(env, { to, fullName, profileUrl, editUrl, qrPngDataUrl, tier }) {
   if (!env.RESEND_API_KEY) return; // not configured yet — skip quietly rather than fail the webhook
 
   const fromAddress = env.EMAIL_FROM || "My Emergency Info <hello@mail.myemergencyinfo.net>";
@@ -46,14 +45,6 @@ async function sendConfirmationEmail(env, { to, fullName, profileUrl, editUrl, q
     ? `<p>Your plan includes <strong>unlimited updates</strong> — use the secure link below anytime your info changes, and you'll always get a fresh one back after you save.</p>`
     : `<p>On the free plan, the update link below works <strong>once</strong>. Upgrading to Essential or Ultimate gets you a link that always stays active, plus room to list more emergency contacts, doctors, and medications on your page.</p>`;
 
-  // TEMPORARY — remove once we've confirmed the real field names GHL sends.
-  // Dumps the exact raw webhook payload at the bottom of the email so we
-  // can see the truth instead of guessing from docs or a buggy tag picker.
-  const debugBlock = debugPayload
-    ? `<hr><p style="font-size:11px;color:#999;">DEBUG — raw webhook payload (temporary, will be removed):</p>
-       <pre style="font-size:10px;color:#999;white-space:pre-wrap;word-break:break-all;">${escHtml(JSON.stringify(debugPayload, null, 2))}</pre>`
-    : "";
-
   const bodyHtml = `
     <div style="font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif;max-width:480px;margin:0 auto;color:#1f2430;">
       <h2 style="color:#1a2b4c;">Your Emergency Info page is ready${greetingName}</h2>
@@ -62,7 +53,6 @@ async function sendConfirmationEmail(env, { to, fullName, profileUrl, editUrl, q
       <p><a href="${escHtml(profileUrl)}/pdf" style="color:#1a2b4c;">Download a printable wallet/glovebox card (PDF)</a></p>
       ${upgradeNote}
       <p>To update your info, use this secure link: <a href="${escHtml(editUrl)}">${escHtml(editUrl)}</a></p>
-      ${debugBlock}
     </div>`;
 
   try {
@@ -103,21 +93,17 @@ async function handleWebhook(request, env, ctx) {
     return json({ error: "email is required" }, 400);
   }
 
-  // GHL doesn't reliably merge "Multi line" custom fields (Emergency
-  // Contacts, Doctors, Medications) into a Webhook action's Custom Data —
-  // confirmed by direct testing on 2026-08-20. Single line fields merge
-  // fine; Multi line fields come through empty every time. So for those
-  // three specifically, go ask GHL's API directly for the real values
-  // instead of trusting whatever the webhook body says. Requires
-  // `ghl_contact_id` (mapped to the {{contact.id}} merge tag, which is
-  // NOT a Multi line field and merges correctly) and a GHL_API_KEY.
-  if (payload.ghl_contact_id) {
-    const authoritative = await fetchMultilineFieldsFromGhl(env, payload.ghl_contact_id);
-    if (authoritative) {
-      if (authoritative.emergency_contacts !== null) payload.emergency_contacts = authoritative.emergency_contacts;
-      if (authoritative.doctors !== null) payload.doctors = authoritative.doctors;
-      if (authoritative.medications !== null) payload.medications = authoritative.medications;
-    }
+  // GHL's Webhook action nests every manually-configured "Custom Data"
+  // key/value pair inside a `customData` object in the outgoing JSON body —
+  // it does NOT flatten them onto the root. Only GHL's own "standard
+  // fields" (email, full_name, contact_id, etc.) land at the root
+  // automatically. Confirmed directly from a raw payload dump on
+  // 2026-08-20: emergency_contacts/doctors/medications/conditions/
+  // allergies/blood_type/tier were all sitting under payload.customData,
+  // which is why they showed up blank downstream — nothing to do with
+  // "Multi line" fields not merging (that theory was wrong).
+  if (payload.customData && typeof payload.customData === "object") {
+    payload = { ...payload, ...payload.customData };
   }
 
   const { code, isNew } = await upsertProfileFromWebhook(env, payload);
@@ -136,7 +122,6 @@ async function handleWebhook(request, env, ctx) {
       editUrl,
       qrPngDataUrl,
       tier: payload.tier ?? "free",
-      debugPayload: payload,
     })
   );
 
