@@ -45,6 +45,18 @@ async function sendConfirmationEmail(env, { to, fullName, profileUrl, editUrl, q
     ? `<p>Your plan includes <strong>unlimited updates</strong> — use the secure link below anytime your info changes, and you'll always get a fresh one back after you save.</p>`
     : `<p>On the free plan, the update link below works <strong>once</strong>. Upgrading to Essential or Ultimate gets you a link that always stays active, plus room to list more emergency contacts, doctors, and medications on your page.</p>`;
 
+  // Self-service cancellation via Stripe's own hosted "customer portal" —
+  // a single shareable link (same for everyone) where a customer enters
+  // their email, Stripe emails *them* a one-time login link, and they land
+  // on a page where they can cancel or manage their subscription with zero
+  // involvement from us. Only shown to paid tiers, since free has nothing
+  // to cancel. Set STRIPE_PORTAL_URL once the portal is activated in the
+  // Stripe Dashboard (Settings -> Billing -> Customer portal).
+  const cancelNote =
+    isPaidTier(tier) && env.STRIPE_PORTAL_URL
+      ? `<p>Need to cancel or manage your subscription? You can do that anytime, on your own, here: <a href="${escHtml(env.STRIPE_PORTAL_URL)}">${escHtml(env.STRIPE_PORTAL_URL)}</a></p>`
+      : "";
+
   const bodyHtml = `
     <div style="font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif;max-width:480px;margin:0 auto;color:#1f2430;">
       <h2 style="color:#1a2b4c;">Your Emergency Info page is ready${greetingName}</h2>
@@ -53,6 +65,7 @@ async function sendConfirmationEmail(env, { to, fullName, profileUrl, editUrl, q
       <p><a href="${escHtml(profileUrl)}/pdf" style="color:#1a2b4c;">Download a printable wallet/glovebox card (PDF)</a></p>
       ${upgradeNote}
       <p>To update your info, use this secure link: <a href="${escHtml(editUrl)}">${escHtml(editUrl)}</a></p>
+      ${cancelNote}
     </div>`;
 
   try {
