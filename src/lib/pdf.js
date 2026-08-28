@@ -75,7 +75,9 @@ export async function generateProfilePdf(profile, profileUrl) {
       (c) => c.charCodeAt(0)
     );
     const qrImage = await doc.embedPng(qrImageBytes);
-    const qrSize = 90;
+    // Sized up from the original 90pt so the "MY EMERGENCY INFO" border
+    // baked into the QR image itself stays legible when printed.
+    const qrSize = 130;
     page.drawImage(qrImage, {
       x: 396 - margin - qrSize,
       y: margin + 14,
