@@ -9,8 +9,9 @@
     "db:init": "wrangler d1 execute myemergencyinfo --file=./schema.sql",
     "db:init:local": "wrangler d1 execute myemergencyinfo --local --file=./schema.sql"
   },
-  "dependencies": {
+   "dependencies": {
     "pdf-lib": "^1.17.1",
+    "pngjs": "^7.0.0",
     "qrcode": "^1.5.4"
   },
   "devDependencies": {
