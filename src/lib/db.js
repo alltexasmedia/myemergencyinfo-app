@@ -1,25 +1,19 @@
 import { generateCode, generateEditToken, hashToken } from "./codegen.js";
 
-const EDIT_TOKEN_TTL_SECONDS = 60 * 60 * 48; // 48 hours — free tier's one-shot link
-// Paid tiers advertise "update anytime," and a fresh link is issued on every
-// save anyway — but the very first link (from the signup confirmation email)
-// needs to survive until the customer's first edit, whenever that is. A long
-// TTL here is what makes "anytime" actually true instead of a 48-hour window.
-const PAID_EDIT_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 365; // 1 year
+const EDIT_TOKEN_TTL_SECONDS = 60 * 60 * 48; // 48 hours
 
 function nowSeconds() {
   return Math.floor(Date.now() / 1000);
 }
 
-// emergency_contacts / doctors / medications are stored as plain free-form
-// text (one entry per line, typed by the customer) — not JSON. Only
-// `conditions` is still a small JSON array of strings, since that one
-// renders as individual pill/flag badges on the page.
 function parseJsonColumns(row) {
   if (!row) return row;
   return {
     ...row,
-    conditions: safeParse(row.conditions, []),
+    emergency_contacts: normalizeEntryList(safeParse(row.emergency_contacts, [])),
+    doctors: normalizeEntryList(safeParse(row.doctors, [])),
+    medications: normalizeEntryList(safeParse(row.medications, [])),
+    conditions: normalizeStringList(safeParse(row.conditions, [])),
   };
 }
 
@@ -32,13 +26,22 @@ function safeParse(value, fallback) {
   }
 }
 
-// Turns the comma-separated "conditions" text (from either the GHL webhook
-// or the self-service edit form) into a clean array of strings for storage.
-export function splitConditions(text) {
-  return String(text ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+// GHL's custom fields are plain text boxes, not structured repeaters, so a
+// contact/doctor/medication can arrive (and get stored) as a single freeform
+// string (e.g. someone typed "Jane Doe 555-1234" into one box) instead of
+// the {name, relationship/specialty/dosage, phone} shape the render/PDF
+// code expects. Normalizing here — the one place every read flows through —
+// means every page shows that text as a best-effort entry instead of
+// crashing on a missing .forEach/.map.
+function normalizeEntryList(value) {
+  const arr = Array.isArray(value) ? value : typeof value === "string" && value.trim() ? [value.trim()] : [];
+  return arr.map((entry) => (entry && typeof entry === "object" ? entry : { name: String(entry) }));
+}
+
+function normalizeStringList(value) {
+  if (Array.isArray(value)) return value.map((v) => String(v));
+  if (typeof value === "string" && value.trim()) return [value.trim()];
+  return [];
 }
 
 export async function getProfileByCode(env, code) {
@@ -48,14 +51,11 @@ export async function getProfileByCode(env, code) {
   return parseJsonColumns(row);
 }
 
-// GHL's webhook action doesn't reliably expose a contact ID as a mergeable
-// field, but it does automatically include `email` as part of its
-// "standard data" — so email is what identifies a returning customer
-// (i.e. what tells us to update their existing profile instead of
-// creating a second one).
-export async function getProfileByEmail(env, email) {
-  const row = await env.DB.prepare("SELECT * FROM profiles WHERE email = ?")
-    .bind(email)
+export async function getProfileByGhlContactId(env, ghlContactId) {
+  const row = await env.DB.prepare(
+    "SELECT * FROM profiles WHERE ghl_contact_id = ?"
+  )
+    .bind(ghlContactId)
     .first();
   return parseJsonColumns(row);
 }
@@ -79,19 +79,18 @@ async function generateUniqueCode(env) {
 // for that contact. The permanent `code` (and therefore the public URL and
 // QR code) is only ever assigned once, on creation.
 export async function upsertProfileFromWebhook(env, payload) {
-  const existing = payload.email
-    ? await getProfileByEmail(env, payload.email)
+  const existing = payload.ghl_contact_id
+    ? await getProfileByGhlContactId(env, payload.ghl_contact_id)
     : null;
 
   const ts = nowSeconds();
   const fields = {
-    email: payload.email ?? null,
     full_name: payload.full_name ?? null,
     tier: payload.tier ?? "free",
-    emergency_contacts: String(payload.emergency_contacts ?? ""),
-    doctors: String(payload.doctors ?? ""),
-    medications: String(payload.medications ?? ""),
-    conditions: JSON.stringify(splitConditions(payload.conditions)),
+    emergency_contacts: JSON.stringify(payload.emergency_contacts ?? []),
+    doctors: JSON.stringify(payload.doctors ?? []),
+    medications: JSON.stringify(payload.medications ?? []),
+    conditions: JSON.stringify(payload.conditions ?? []),
     allergies: payload.allergies ?? null,
     blood_type: payload.blood_type ?? null,
   };
@@ -121,13 +120,13 @@ export async function upsertProfileFromWebhook(env, payload) {
   const code = await generateUniqueCode(env);
   await env.DB.prepare(
     `INSERT INTO profiles
-     (code, email, tier, full_name, emergency_contacts, doctors,
+     (code, ghl_contact_id, tier, full_name, emergency_contacts, doctors,
       medications, conditions, allergies, blood_type, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       code,
-      fields.email,
+      payload.ghl_contact_id ?? null,
       fields.tier,
       fields.full_name,
       fields.emergency_contacts,
@@ -146,11 +145,10 @@ export async function upsertProfileFromWebhook(env, payload) {
 // Issues a fresh one-time edit link. Only the SHA-256 hash is stored —
 // the plaintext token is returned once, for GHL to email/text to the
 // customer, and is never persisted anywhere in plaintext.
-export async function issueEditToken(env, code, tier = "free") {
+export async function issueEditToken(env, code) {
   const token = generateEditToken();
   const hash = await hashToken(token);
-  const ttl = isPaidTier(tier) ? PAID_EDIT_TOKEN_TTL_SECONDS : EDIT_TOKEN_TTL_SECONDS;
-  const expiresAt = nowSeconds() + ttl;
+  const expiresAt = nowSeconds() + EDIT_TOKEN_TTL_SECONDS;
   await env.DB.prepare(
     "UPDATE profiles SET edit_token_hash=?, edit_token_expires_at=? WHERE code=?"
   )
@@ -180,9 +178,9 @@ export async function updateProfileFields(env, code, fields) {
   )
     .bind(
       fields.full_name ?? null,
-      String(fields.emergency_contacts ?? ""),
-      String(fields.doctors ?? ""),
-      String(fields.medications ?? ""),
+      JSON.stringify(fields.emergency_contacts ?? []),
+      JSON.stringify(fields.doctors ?? []),
+      JSON.stringify(fields.medications ?? []),
       JSON.stringify(fields.conditions ?? []),
       fields.allergies ?? null,
       fields.blood_type ?? null,
@@ -200,13 +198,4 @@ export async function invalidateEditToken(env, code) {
   )
     .bind(code)
     .run();
-}
-
-// Paid tiers get unlimited self-service edits, marketed as "update your
-// info anytime." Free tier's edit link is single-use, which is the
-// upgrade hook. Keep this list in sync with the tiers offered at signup.
-const PAID_TIERS = new Set(["essential", "ultimate"]);
-
-export function isPaidTier(tier) {
-  return PAID_TIERS.has(tier);
 }
