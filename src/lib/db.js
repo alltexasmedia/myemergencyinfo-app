@@ -44,6 +44,26 @@ function normalizeStringList(value) {
   return [];
 }
 
+// Which tiers get "unlimited edits" perks (a fresh edit link reissued on
+// every save, cancel-subscription link in the confirmation email, etc.)
+// versus the free tier's single-use link.
+const PAID_TIERS = new Set(["essential", "ultimate"]);
+
+export function isPaidTier(tier) {
+  return PAID_TIERS.has(tier);
+}
+
+// The edit form submits "conditions" as one freeform textarea/text field
+// (comma-separated), but the rest of the app stores/renders conditions as
+// an array of strings — this is the single place that turns one into the
+// other.
+export function splitConditions(text) {
+  return String(text ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 export async function getProfileByCode(env, code) {
   const row = await env.DB.prepare("SELECT * FROM profiles WHERE code = ?")
     .bind(code)
@@ -144,8 +164,11 @@ export async function upsertProfileFromWebhook(env, payload) {
 
 // Issues a fresh one-time edit link. Only the SHA-256 hash is stored —
 // the plaintext token is returned once, for GHL to email/text to the
-// customer, and is never persisted anywhere in plaintext.
-export async function issueEditToken(env, code) {
+// customer, and is never persisted anywhere in plaintext. `tier` is
+// accepted (not just `code`) to match every call site — it isn't used in
+// the query today, but keeping the signature in sync with how the rest of
+// the app actually calls this avoids confusion later.
+export async function issueEditToken(env, code, tier) {
   const token = generateEditToken();
   const hash = await hashToken(token);
   const expiresAt = nowSeconds() + EDIT_TOKEN_TTL_SECONDS;
