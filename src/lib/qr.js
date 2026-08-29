@@ -90,7 +90,7 @@ const FONT_5x7 = {
   O: ["01110", "10001", "10001", "10001", "10001", "10001", "01110"],
   " ": ["000", "000", "000", "000", "000", "000", "000"],
 };
-const GLYPH_GAP = 1;
+const GLYPH_GAP = 2;
 
 // Renders `text` as a 2D grid of 0/1 (rows x cols) using FONT_5x7.
 function renderTextBitmap(text) {
@@ -110,21 +110,18 @@ function renderTextBitmap(text) {
   return boldenBitmap(bitmap);
 }
 
-// Faux-bold: OR's each cell with its right and bottom neighbor, thickening
-// every stroke by ~1 pre-scale pixel (which becomes a full `scale` pixels
-// wide once drawn). Purely cosmetic — never changes bitmap dimensions, so
-// nothing downstream that depends on width/height needs to change.
+// Faux-bold: thickens every stroke by 1 pre-scale pixel to the right only.
+// (An earlier version also OR'd the row below, which erased the internal
+// details — R's open leg, E's crossbar gap, G's notch — that make these
+// blocky letters legible in the first place, and it ate the inter-letter
+// gap too, causing words to smear together. Horizontal-only dilation
+// keeps every glyph's internal shape intact.)
 function boldenBitmap(bitmap) {
   const h = bitmap.length, w = bitmap[0].length;
   const out = Array.from({ length: h }, () => new Uint8Array(w));
   for (let row = 0; row < h; row++) {
     for (let col = 0; col < w; col++) {
-      out[row][col] =
-        bitmap[row][col] ||
-        (col + 1 < w && bitmap[row][col + 1]) ||
-        (row + 1 < h && bitmap[row + 1][col])
-          ? 1
-          : 0;
+      out[row][col] = bitmap[row][col] || (col + 1 < w && bitmap[row][col + 1]) ? 1 : 0;
     }
   }
   return out;
