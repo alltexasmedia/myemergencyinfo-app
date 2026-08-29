@@ -10,6 +10,11 @@ import { PNG } from "pngjs";
 const BRAND_TEXT = "MY EMERGENCY INFO";
 const DARK_HEX = "#1a2b4c";
 const DARK_RGB = [0x1a, 0x2b, 0x4c];
+// "Highlighter" band drawn behind the brand text on each edge, mimicking
+// the yellow-highlighter look the user found helped legibility after
+// printing/cutting the wallet card.
+const HIGHLIGHT_HEX = "#ffeb3b";
+const HIGHLIGHT_RGB = [0xff, 0xeb, 0x3b];
 
 // Renders a QR code as an SVG string — pure matrix generation, no canvas —
 // which is what makes this safe to run inside the Workers/Pages runtime.
@@ -37,17 +42,32 @@ function addSvgBrandBorder(svgString, moduleCount, margin) {
   const half = dim / 2;
   const fontSize = margin * 0.6;
   const textLength = dim - margin * 1.6;
-  const style = `font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="${fontSize}" fill="${DARK_HEX}" text-anchor="middle" dominant-baseline="middle" textLength="${textLength}" lengthAdjust="spacingAndGlyphs"`;
+  // Bumped from 700 to 900 plus a thin matching stroke, purely to make the
+  // edge labels read as bolder on the printed/cut wallet card.
+  const style = `font-family="Arial, Helvetica, sans-serif" font-weight="900" font-size="${fontSize}" fill="${DARK_HEX}" stroke="${DARK_HEX}" stroke-width="${fontSize * 0.04}" text-anchor="middle" dominant-baseline="middle" textLength="${textLength}" lengthAdjust="spacingAndGlyphs"`;
 
   const topY = margin / 2;
   const bottomY = dim - margin / 2;
   const leftX = margin / 2;
   const rightX = dim - margin / 2;
 
+  // Yellow "highlighter" band sized to sit just behind each label, drawn
+  // before the text so the text renders on top of it.
+  const hlW = textLength + fontSize * 0.5;
+  const hlH = fontSize * 1.15;
+  const highlight = (cx, cy, rotate) =>
+    `<rect x="${cx - hlW / 2}" y="${cy - hlH / 2}" width="${hlW}" height="${hlH}" fill="${HIGHLIGHT_HEX}"${
+      rotate ? ` transform="rotate(${rotate} ${cx} ${cy})"` : ""
+    }/>`;
+
   const labels =
+    highlight(half, topY, 0) +
     `<text x="${half}" y="${topY}" ${style}>${BRAND_TEXT}</text>` +
+    highlight(half, bottomY, 0) +
     `<text x="${half}" y="${bottomY}" ${style}>${BRAND_TEXT}</text>` +
+    highlight(leftX, half, -90) +
     `<text x="${leftX}" y="${half}" ${style} transform="rotate(-90 ${leftX} ${half})">${BRAND_TEXT}</text>` +
+    highlight(rightX, half, 90) +
     `<text x="${rightX}" y="${half}" ${style} transform="rotate(90 ${rightX} ${half})">${BRAND_TEXT}</text>`;
 
   return svgString.replace("</svg>", `${labels}</svg>`);
@@ -87,7 +107,27 @@ function renderTextBitmap(text) {
     }
     x += glyph[0].length + GLYPH_GAP;
   }
-  return bitmap;
+  return boldenBitmap(bitmap);
+}
+
+// Faux-bold: OR's each cell with its right and bottom neighbor, thickening
+// every stroke by ~1 pre-scale pixel (which becomes a full `scale` pixels
+// wide once drawn). Purely cosmetic — never changes bitmap dimensions, so
+// nothing downstream that depends on width/height needs to change.
+function boldenBitmap(bitmap) {
+  const h = bitmap.length, w = bitmap[0].length;
+  const out = Array.from({ length: h }, () => new Uint8Array(w));
+  for (let row = 0; row < h; row++) {
+    for (let col = 0; col < w; col++) {
+      out[row][col] =
+        bitmap[row][col] ||
+        (col + 1 < w && bitmap[row][col + 1]) ||
+        (row + 1 < h && bitmap[row + 1][col])
+          ? 1
+          : 0;
+    }
+  }
+  return out;
 }
 
 function rotateBitmap90CW(bitmap) {
@@ -129,6 +169,44 @@ function drawBitmap(png, dim, bitmap, originX, originY, scale) {
   }
 }
 
+// Fills a solid rectangle directly on the pixel buffer (used for the
+// yellow "highlighter" band). Clamped to the image bounds so a rounding
+// edge case can never throw.
+function fillRect(png, dim, x0, y0, w, h, rgb) {
+  const xStart = Math.max(0, Math.round(x0));
+  const yStart = Math.max(0, Math.round(y0));
+  const xEnd = Math.min(dim, Math.round(x0 + w));
+  const yEnd = Math.min(dim, Math.round(y0 + h));
+  for (let y = yStart; y < yEnd; y++) {
+    for (let x = xStart; x < xEnd; x++) {
+      const idx = (dim * y + x) << 2;
+      png.data[idx] = rgb[0];
+      png.data[idx + 1] = rgb[1];
+      png.data[idx + 2] = rgb[2];
+      png.data[idx + 3] = 255;
+    }
+  }
+}
+
+// Keeps a highlight band's position+size within [bandStart, bandEnd] along
+// one axis, so the yellow band can never bleed into the QR modules or off
+// the edge of the image.
+function clampToBand(pos, size, bandStart, bandEnd) {
+  if (size >= bandEnd - bandStart) return bandStart;
+  return Math.min(Math.max(pos, bandStart), bandEnd - size);
+}
+
+// Draws the yellow highlighter band behind one label instance. `axis`
+// picks which dimension gets clamped to the margin band: "y" for the
+// top/bottom (horizontal) labels, "x" for the left/right (rotated) ones.
+function drawHighlight(png, dim, textX, textY, textW, textH, pad, bandStart, bandEnd, axis) {
+  let rx = textX - pad, ry = textY - pad;
+  const rw = textW + pad * 2, rh = textH + pad * 2;
+  if (axis === "y") ry = clampToBand(ry, rh, bandStart, bandEnd);
+  else rx = clampToBand(rx, rw, bandStart, bandEnd);
+  fillRect(png, dim, rx, ry, rw, rh, HIGHLIGHT_RGB);
+}
+
 // Stamps BRAND_TEXT along all four inner edges of the white quiet zone,
 // directly onto the raw pixel buffer. This is the raster equivalent of
 // addSvgBrandBorder above, for contexts (email attachment, PDF) that need
@@ -146,17 +224,27 @@ function stampBrandBorder(png, dim, marginPx) {
   ));
   const textW = bmW * scale, textH = bmH * scale;
   const topX = Math.round((dim - textW) / 2);
+  const pad = Math.max(2, Math.round(scale * 0.6)); // highlight band padding around each label
 
-  drawBitmap(png, dim, base, topX, Math.round((marginPx - textH) / 2), scale);
-  drawBitmap(png, dim, base, topX, dim - marginPx + Math.round((marginPx - textH) / 2), scale);
+  const topTextY = Math.round((marginPx - textH) / 2);
+  const bottomTextY = dim - marginPx + topTextY;
+
+  drawHighlight(png, dim, topX, topTextY, textW, textH, pad, 0, marginPx, "y");
+  drawBitmap(png, dim, base, topX, topTextY, scale);
+  drawHighlight(png, dim, topX, bottomTextY, textW, textH, pad, dim - marginPx, dim, "y");
+  drawBitmap(png, dim, base, topX, bottomTextY, scale);
 
   const left = rotateBitmap90CCW(base);
   const right = rotateBitmap90CW(base);
   const rTextW = textH, rTextH = textW; // dimensions swap after rotation
   const sideY = Math.round((dim - rTextH) / 2);
+  const leftTextX = Math.round((marginPx - rTextW) / 2);
+  const rightTextX = dim - marginPx + leftTextX;
 
-  drawBitmap(png, dim, left, Math.round((marginPx - rTextW) / 2), sideY, scale);
-  drawBitmap(png, dim, right, dim - marginPx + Math.round((marginPx - rTextW) / 2), sideY, scale);
+  drawHighlight(png, dim, leftTextX, sideY, rTextW, rTextH, pad, 0, marginPx, "x");
+  drawBitmap(png, dim, left, leftTextX, sideY, scale);
+  drawHighlight(png, dim, rightTextX, sideY, rTextW, rTextH, pad, dim - marginPx, dim, "x");
+  drawBitmap(png, dim, right, rightTextX, sideY, scale);
 }
 
 async function renderBrandedQrPng(url) {
