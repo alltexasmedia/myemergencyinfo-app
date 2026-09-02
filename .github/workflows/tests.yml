@@ -1,0 +1,55 @@
+name: Tests
+
+# Runs automatically on every push and every pull request against main.
+# This is what "automatic protection" means here: if a change breaks the
+# profile data pipeline (the [object Object] bug from 2026-09-02, or a
+# plain syntax mistake from pasting into GitHub's web editor), this shows
+# up as a red X on the commit/PR in GitHub within about a minute.
+#
+# IMPORTANT LIMITATION, stated plainly: this does NOT stop a broken commit
+# from deploying. Cloudflare's git integration deploys on push independently
+# of this workflow's result. A red X here is a loud warning to go fix and
+# re-push -- it is not currently wired up to block the live site from
+# updating. Making it a hard gate would require changes to the Cloudflare
+# Pages/Workers build settings, which is a separate, deliberate step, not
+# something to bundle in silently here.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Check every source file parses
+        # Catches plain syntax mistakes (an easy thing to introduce when
+        # pasting full-file replacements into GitHub's web editor) even in
+        # files the tests below don't happen to import.
+        #
+        # NOTE: every file here uses import/export syntax, so this must
+        # be checked with --input-type=module via stdin. Plain
+        # `node --check somefile.js` silently does NOT catch syntax errors
+        # in files like these -- confirmed the hard way while building this
+        # workflow, so don't "simplify" this back to that form.
+        run: |
+          set -e
+          for f in $(find src -name '*.js'); do
+            echo "Checking $f"
+            node --input-type=module --check < "$f"
+          done
+
+      - name: Run regression tests
+        run: npm test
+
