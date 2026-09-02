@@ -6,7 +6,7 @@ function nowSeconds() {
   return Math.floor(Date.now() / 1000);
 }
 
-function parseJsonColumns(row) {
+export function parseJsonColumns(row) {
   if (!row) return row;
   return {
     ...row,
