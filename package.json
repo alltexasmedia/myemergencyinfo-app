@@ -7,7 +7,8 @@
     "dev": "wrangler dev --local",
     "deploy": "wrangler deploy",
     "db:init": "wrangler d1 execute myemergencyinfo --file=./schema.sql",
-    "db:init:local": "wrangler d1 execute myemergencyinfo --local --file=./schema.sql"
+    "db:init:local": "wrangler d1 execute myemergencyinfo --local --file=./schema.sql",
+    "test": "node --test 'src/**/*.test.js'"
   },
    "dependencies": {
     "pdf-lib": "^1.17.1",
