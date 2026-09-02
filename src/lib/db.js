@@ -10,9 +10,9 @@ function parseJsonColumns(row) {
   if (!row) return row;
   return {
     ...row,
-    emergency_contacts: normalizeEntryList(safeParse(row.emergency_contacts, [])),
-    doctors: normalizeEntryList(safeParse(row.doctors, [])),
-    medications: normalizeEntryList(safeParse(row.medications, [])),
+    emergency_contacts: normalizeMultilineText(safeParse(row.emergency_contacts, "")),
+    doctors: normalizeMultilineText(safeParse(row.doctors, "")),
+    medications: normalizeMultilineText(safeParse(row.medications, "")),
     conditions: normalizeStringList(safeParse(row.conditions, [])),
   };
 }
@@ -26,16 +26,33 @@ function safeParse(value, fallback) {
   }
 }
 
-// GHL's custom fields are plain text boxes, not structured repeaters, so a
-// contact/doctor/medication can arrive (and get stored) as a single freeform
-// string (e.g. someone typed "Jane Doe 555-1234" into one box) instead of
-// the {name, relationship/specialty/dosage, phone} shape the render/PDF
-// code expects. Normalizing here — the one place every read flows through —
-// means every page shows that text as a best-effort entry instead of
-// crashing on a missing .forEach/.map.
-function normalizeEntryList(value) {
-  const arr = Array.isArray(value) ? value : typeof value === "string" && value.trim() ? [value.trim()] : [];
-  return arr.map((entry) => (entry && typeof entry === "object" ? entry : { name: String(entry) }));
+// GHL's custom fields are plain text boxes, not structured repeaters, and
+// every actual consumer of these three fields — the profile page's display,
+// the edit form's <textarea>s, and tiers.js's per-line save limits — reads
+// them as one plain string with one entry per line. That's also exactly
+// what gets written on save (see upsertProfileFromWebhook/updateProfileFields
+// below: JSON.stringify of that raw string).
+//
+// 2026-08-30 FIX: this used to wrap the value into `[{ name: <whole text> }]`
+// (a single object in an array), on the theory that render/PDF code wanted
+// {name, phone, ...} objects. Nothing in the app actually consumes that
+// shape — the PDF wallet card was redesigned in an earlier session to just
+// show the QR code, and never reads these fields at all — so that array
+// was being stringified straight back to text by String()/join(), which for
+// an array containing an object literally produces "[object Object]". That's
+// why every real, correctly-saved contact/doctor/medication showed up that
+// way instead of the actual text. Falling back to a plain string here (with
+// a defensive join for any already-stored array-shaped data from that
+// period) fixes it without needing any data migration — the underlying
+// stored text was always fine, only this read-time transform was wrong.
+function normalizeMultilineText(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => (entry && typeof entry === "object" ? entry.name ?? "" : String(entry)))
+      .filter(Boolean)
+      .join("\n");
+  }
+  return typeof value === "string" ? value : "";
 }
 
 function normalizeStringList(value) {
